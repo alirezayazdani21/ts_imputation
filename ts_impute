@@ -1,0 +1,68 @@
+library(quantmod)
+library(tidyverse)
+library(ggplot2)
+
+
+#Unemployment rate
+getSymbols("UNRATE",src="FRED")
+df<-fortify.zoo(UNRATE['1950/2015']) %>% 
+  rename(date=Index,ump=UNRATE) %>% 
+  mutate(ump_miss=ump)
+
+#setting 100 rows to NA
+df_na<-df %>% select(-ump)
+set.seed(12345)
+df_na[sample(nrow(df_na), 200), 2]<-NA
+summary(df_na$ump_miss)
+
+#impute missing values
+library(imputeTS)
+
+imp_linear<- na_interpolation(df_na$ump_miss,option="linear")
+imp_spline<- na_interpolation(df_na$ump_miss,option="spline")
+imp_sma<- na_ma(df_na$ump_miss,k=3,weighting="simple")
+imp_kalman<- na_kalman(df_na$ump_miss,model = "StructTS", smooth = T)
+
+
+df_imp<-df %>% mutate(ump_miss=df_na$ump_miss,
+                   imp_linear=as.numeric(imp_linear),
+                   imp_spline=as.numeric(imp_spline),
+                   imp_sma=as.numeric(imp_sma),
+                   imp_kalman=as.numeric(imp_kalman),
+                   )
+
+summary(df_imp)
+
+
+df_miss<-df_imp %>% filter(is.na(ump_miss)) %>% select(-ump_miss) 
+
+pivot_longer(df_miss,-date,names_to="series",values_to="ump_rate") %>%  
+  ggplot(.,aes(x=date,y=ump_rate))+geom_line(aes(col=series))
+
+#################
+library(Metrics)
+library(gt)
+
+metrics_grp<-function(x,y){round(rbind(
+  mape(x,y),
+  mae(x,y),
+  rmse(x,y)
+),3)
+}
+
+metrics_df<-rbind.data.frame("MAPE",
+                             "MAE",
+                             "RMSE"
+                  
+)
+colnames(metrics_df)<-"Metric"
+
+metrics_df<- metrics_df %>% 
+  mutate(imp_linear=metrics_grp(df_miss$ump,df_miss$imp_linear),
+         imp_spline=metrics_grp(df_miss$ump,df_miss$imp_spline),
+         imp_sma=metrics_grp(df_miss$ump,df_miss$imp_sma),
+         imp_kalman=metrics_grp(df_miss$ump,df_miss$imp_kalman)
+  ) 
+
+
+gt(metrics_df)
